@@ -1,102 +1,47 @@
-import Image from "next/image";
+import { preloadQuery } from "convex/nextjs";
+import { api } from "@/convex/_generated/api";
+import { Logo } from "@/components/ui";
+import PublicTools from "@/components/PublicTools";
+import { AuthCta } from "@/components/AuthCta";
 
-export default function Home() {
+// Rendered on each request so the list is fresh; the client then keeps it live.
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const tools = await preloadQuery(api.tools.publicList, {});
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <div className="flex min-h-dvh flex-col">
+      <header className="mx-auto flex w-full max-w-[1200px] flex-wrap items-center justify-between gap-3 px-6 py-5">
+        <Logo />
+        <AuthCta />
+      </header>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
+      <main className="mx-auto flex w-full max-w-[1200px] flex-1 flex-wrap items-start gap-12 px-6 pb-16 pt-8">
+        <section className="flex flex-[1_1_380px] flex-col gap-5 pt-6">
+          <h1 className="font-display text-5xl font-bold leading-[1.03] tracking-tight sm:text-[56px]">
+            Borrow what you need.
+            <br />
+            <span className="text-brand">Lend what you don&apos;t.</span>
+          </h1>
+          <p className="max-w-[460px] text-lg leading-relaxed text-muted">
+            The drill you use twice a year is the one your neighbour needs this weekend. List it, lend it, and get it
+            back on time with friendly reminders.
+          </p>
+          <div>
+            <AuthCta large />
+          </div>
+          <ol className="flex flex-wrap gap-x-6 gap-y-2 pt-2 text-sm text-muted">
+            <li><b className="text-ink">1</b> List a tool</li>
+            <li><b className="text-ink">2</b> A neighbour asks for dates</li>
+            <li><b className="text-ink">3</b> You approve, and it comes back</li>
+          </ol>
+        </section>
+
+        <PublicTools preloaded={tools} />
       </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
+
+      <footer className="border-t border-line py-6 text-center text-xs text-muted">
+        LendLoop is a demo project. Owners stay private until you sign in and a loan is agreed.
       </footer>
     </div>
   );

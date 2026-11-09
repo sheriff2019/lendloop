@@ -1,0 +1,185 @@
+{
+  "id": "LendLoopErrors03",
+  "name": "LendLoop · 3 · Error handler",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 3 · Error handler\nSet as the **Error workflow** of workflows 1 and 2, so a failed run is never silent:\n1. Signed POST `/n8n/failures` → shows on LendLoop **Admin** (idempotent per execution id)\n2. Email to `ADMIN_ALERT_EMAIL`, even if step 1 failed",
+        "height": 230,
+        "width": 460,
+        "color": 3
+      },
+      "id": "ebf49a3e-42a6-57f2-9048-11e7d3097714",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -340
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "5247502d-2ca7-5d61-80ae-34ea59c1b7ff",
+      "name": "When a workflow fails",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Signs a request to Convex: HMAC-SHA256 over \"<timestamp>.<purpose>.<body>\".\n// The secret comes from the n8n environment (docker-compose / .env), never from this workflow.\nconst crypto = require('crypto');\nfunction signFor(purpose, body) {\n  const secret = $env.N8N_TO_CONVEX_SECRET;\n  if (!secret || secret.length < 32) throw new Error('N8N_TO_CONVEX_SECRET is not set in the n8n environment');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const signature = 'v1=' + crypto.createHmac('sha256', secret).update(`${timestamp}.${purpose}.${body}`).digest('hex');\n  return { timestamp, signature, body };\n}\n\n// Runs when workflow 1 or 2 fails (after its own retries). Records the failure in\n// Convex — shown in red on LendLoop's Admin page — and emails the admin.\nconst { execution = {}, workflow = {} } = $input.first().json;\nconst failure = {\n  workflow: String(workflow.name || 'Unknown workflow').slice(0, 200),\n  node: execution.error && execution.error.node ? String(execution.error.node.name || '').slice(0, 200) : (execution.lastNodeExecuted || undefined),\n  // A Stop-and-Error node's own text lands in `messages`; other node errors put a\n  // headline in `message` and the detail (e.g. an HTTP body) in `description`.\n  message: (() => {\n    const e = execution.error || {};\n    const own = Array.isArray(e.messages) ? e.messages.filter(Boolean) : [];\n    const parts = own.length ? own : [e.message, e.description];\n    return parts.filter((v, i, a) => v && a.indexOf(v) === i).join(' — ').slice(0, 1500) || 'No error message';\n  })(),\n  executionId: String(execution.id || `unsaved-${Date.now()}`),\n};\nconst app = ($env.APP_URL || 'http://localhost:3000').replace(/\\/$/, '');\nreturn [{\n  json: {\n    ...signFor('workflow-failure', JSON.stringify(failure)),\n    to: $env.ADMIN_ALERT_EMAIL,\n    subject: `LendLoop automation failed: ${failure.workflow}`,\n    text: `\"${failure.workflow}\" failed${failure.node ? ` at \"${failure.node}\"` : ''}.\\n\\n${failure.message}\\n\\nn8n execution: ${execution.url || failure.executionId}\\nLendLoop admin: ${app}/admin`,\n  },\n}];\n"
+      },
+      "id": "cf83af27-235a-540b-9405-1c97db021e12",
+      "name": "Describe the failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/failures",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "id": "1c3cbbb4-fa76-5527-9d3b-c6a4e7c24c3d",
+      "name": "Record in Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Carries the alert email forward whether or not the Convex write worked.\nreturn [{ json: $('Describe the failure').first().json }];\n"
+      },
+      "id": "bf761aa3-31b4-5ca0-b932-1a41d88c101e",
+      "name": "Prepare alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.MAIL_FROM }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "6a700152-c8db-5cf3-b293-73658f6dec22",
+      "name": "Email the admin",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "LendLoopSmtp0001",
+          "name": "LendLoop SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    }
+  ],
+  "connections": {
+    "When a workflow fails": {
+      "main": [
+        [
+          {
+            "node": "Describe the failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Describe the failure": {
+      "main": [
+        [
+          {
+            "node": "Record in Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record in Convex": {
+      "main": [
+        [
+          {
+            "node": "Prepare alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare alert": {
+      "main": [
+        [
+          {
+            "node": "Email the admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all"
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false,
+  "versionId": "0ddf7dc8-a9e4-5906-a094-e0015b56234b"
+}

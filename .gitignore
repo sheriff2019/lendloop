@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+!.env.example
+!.env.local.example
+
+# local only
+.convex/
+.clerk/
+.shots/
+/test-results/
+/playwright-report/
+/playwright/.cache/

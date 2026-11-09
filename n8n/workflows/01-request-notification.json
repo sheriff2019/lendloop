@@ -1,0 +1,478 @@
+{
+  "id": "LendLoopEvents01",
+  "name": "LendLoop · 1 · Request notification",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 1 · Request notification\nConvex POSTs a signed event whenever a borrow request is created or changes status.\n\n1. **Verify signature**: HMAC-SHA256 + 5-minute window; bad → 401\n2. Duplicate event id (a Convex retry) → 200, nothing sent\n3. Answer 202 straight away, then email the ONE person concerned\n4. Write the result back to Convex (signed, idempotent)\n5. Email failed → recorded, then this run fails on purpose → **Error workflow** alerts the admin\n\nSecrets: `$env.CONVEX_TO_N8N_SECRET`, `$env.N8N_TO_CONVEX_SECRET`; SMTP is an n8n credential.",
+        "height": 360,
+        "width": 520,
+        "color": 5
+      },
+      "id": "74b3f9c9-781f-57b6-8d2d-4a0bb0beac39",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -420
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lendloop-events",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "d09abb2b-e4fb-528b-914d-a3ff1cc13c47",
+      "name": "Loan event (webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "ade3117c-6622-5604-b789-54f94957cacb"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verifies that this event really came from LendLoop's Convex backend.\n// Signed string: \"<timestamp>.loan-event.<raw body>\", HMAC-SHA256, header \"v1=<hex>\".\n// Refuses missing/old timestamps (5-minute window) and compares in constant time.\nconst crypto = require('crypto');\nconst MAX_SKEW_SECONDS = 300;\n\nconst secret = $env.CONVEX_TO_N8N_SECRET;\nif (!secret || secret.length < 32) throw new Error('CONVEX_TO_N8N_SECRET is not set in the n8n environment');\n\nconst item = $input.first();\nconst headers = item.json.headers || {};\nconst timestamp = String(headers['x-lendloop-timestamp'] || '');\nconst signature = String(headers['x-lendloop-signature'] || '');\n\n// The Webhook node keeps the exact bytes Convex signed (\"Raw Body\" option).\nconst raw = item.binary && item.binary.data\n  ? (await this.helpers.getBinaryDataBuffer(0, 'data')).toString('utf8')\n  : JSON.stringify(item.json.body);\n\nconst reject = (reason) => [{ json: { valid: false, reason } }];\nif (!/^\\d{1,12}$/.test(timestamp) || !signature.startsWith('v1=')) return reject('missing or malformed signature');\nif (Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) > MAX_SKEW_SECONDS) return reject('timestamp outside the 5-minute window');\n\nconst expected = crypto.createHmac('sha256', secret).update(`${timestamp}.loan-event.${raw}`).digest();\nconst given = Buffer.from(signature.slice(3), 'hex');\nif (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) return reject('signature mismatch');\n\nlet event;\ntry { event = JSON.parse(raw); } catch (e) { return reject('body is not JSON'); }\nif (!event.eventId || !event.recipient || !event.recipient.email) return reject('event is missing fields');\n\n// Delivery is at-least-once: Convex retries if our answer got lost. Remember recent\n// event ids so a retry never sends the same email twice.\nconst memory = $getWorkflowStaticData('global');\nmemory.seen = Array.isArray(memory.seen) ? memory.seen : [];\nconst duplicate = memory.seen.includes(event.eventId);\nif (!duplicate) {\n  memory.seen.push(event.eventId);\n  if (memory.seen.length > 1000) memory.seen = memory.seen.slice(-1000);\n}\nreturn [{ json: { valid: true, duplicate, event } }];\n"
+      },
+      "id": "9d0aac58-48b5-5b92-870a-6bb0bac537f6",
+      "name": "Verify signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3c04f704-0299-5ec6-b7e7-9320ab68b266",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "dbdd1782-a887-5730-9c19-b4fe11eaa683",
+      "name": "Signature valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"error\": \"invalid_signature\"}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "650ee33b-0bee-52be-9c64-9098c6931994",
+      "name": "Reject (401)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "504d2121-5a10-548c-bde7-6a9c6f764f0b",
+              "leftValue": "={{ $json.duplicate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b9fa3b76-0f3c-5eab-bd6d-43e392dc4d20",
+      "name": "Already handled?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"ok\": true, \"duplicate\": true}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "4e7512ba-e154-524b-ae59-81e8dca36907",
+      "name": "Ack duplicate (200)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"ok\": true}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "81ff0af7-94f1-50a7-904f-7ffe878b945d",
+      "name": "Accept (202)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Turns one LendLoop event into one short, plain-text email. Uses only the\n// fields Convex sent: first names, the tool's name, the dates.\nconst app = ($env.APP_URL || 'http://localhost:3000').replace(/\\/$/, '');\nconst day = (d) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });\nconst REASONS = {\n  dates_taken: 'those dates went to another neighbour',\n  listing_deleted: 'the owner took the listing down',\n  listing_removed: 'the listing was removed by an admin',\n};\n\nreturn $input.all().map(({ json }) => {\n  const e = json.event;\n  const tool = e.tool.name;\n  const other = e.otherParty.firstName;\n  const range = `${day(e.dates.start)} – ${day(e.dates.end)}`;\n  const copy = {\n    'loan.requested': [\n      `${other} would like to borrow your ${tool}`,\n      `${other} has asked to borrow your ${tool} for ${range}.\\n\\nApprove or decline it here:\\n${app}/requests`,\n    ],\n    'loan.approved': [\n      `You can borrow the ${tool}`,\n      `${other} approved your request for the ${tool} (${range}).\\n\\nPlease return it by ${day(e.dates.end)}.\\n${app}/requests?tab=mine`,\n    ],\n    'loan.declined': [\n      `Your request for the ${tool} was declined`,\n      (e.reason\n        ? `Your request for the ${tool} (${range}) was declined automatically: ${REASONS[e.reason] || 'it could not go ahead'}.`\n        : `${other} can't lend the ${tool} for ${range} this time.`) +\n        `\\n\\nSee what else is available:\\n${app}/tools`,\n    ],\n    'loan.cancelled': [\n      `${other} cancelled their request`,\n      `${other} no longer needs your ${tool} for ${range}. There is nothing you need to do.`,\n    ],\n    'loan.returned': [\n      `The ${tool} is marked as returned`,\n      `${other} marked the ${tool} as returned. Thank you for being a good neighbour.`,\n    ],\n  }[e.type] || [`An update about the ${tool}`, `There is an update on your loan:\\n${app}/requests`];\n\n  return {\n    json: {\n      eventId: e.eventId,\n      to: e.recipient.email,\n      subject: copy[0],\n      text: `Hi ${e.recipient.firstName},\\n\\n${copy[1]}\\n\\n— LendLoop`,\n    },\n  };\n});\n"
+      },
+      "id": "2846a45a-2469-504a-bcf9-2c770d2ab8da",
+      "name": "Compose email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.MAIL_FROM }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "f0b7c706-55cd-574d-947f-4e37b52b7405",
+      "name": "Send email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        0
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "LendLoopSmtp0001",
+          "name": "LendLoop SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Signs a request to Convex: HMAC-SHA256 over \"<timestamp>.<purpose>.<body>\".\n// The secret comes from the n8n environment (docker-compose / .env), never from this workflow.\nconst crypto = require('crypto');\nfunction signFor(purpose, body) {\n  const secret = $env.N8N_TO_CONVEX_SECRET;\n  if (!secret || secret.length < 32) throw new Error('N8N_TO_CONVEX_SECRET is not set in the n8n environment');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const signature = 'v1=' + crypto.createHmac('sha256', secret).update(`${timestamp}.${purpose}.${body}`).digest('hex');\n  return { timestamp, signature, body };\n}\n\nfunction errorText(json) {\n  const e = json.error;\n  if (!e) return json.message || 'Unknown error';\n  return typeof e === 'string' ? e : (e.description || e.message || JSON.stringify(e)).slice(0, 500);\n}\n\n// Writes the outcome back to Convex. Convex treats a repeat of the same key as\n// a no-op, so this node's retries can never create a second record.\nreturn $input.all().map((item, i) => {\n  const source = $('Compose email').itemMatching(i).json;\n  const payload = { eventId: source.eventId, status: 'sent', executionId: String($execution.id) };\n  return { json: signFor('notification-result', JSON.stringify(payload)) };\n});\n"
+      },
+      "id": "33f513f9-be77-599c-8745-51ec7c237aeb",
+      "name": "Result: sent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Signs a request to Convex: HMAC-SHA256 over \"<timestamp>.<purpose>.<body>\".\n// The secret comes from the n8n environment (docker-compose / .env), never from this workflow.\nconst crypto = require('crypto');\nfunction signFor(purpose, body) {\n  const secret = $env.N8N_TO_CONVEX_SECRET;\n  if (!secret || secret.length < 32) throw new Error('N8N_TO_CONVEX_SECRET is not set in the n8n environment');\n  const timestamp = String(Math.floor(Date.now() / 1000));\n  const signature = 'v1=' + crypto.createHmac('sha256', secret).update(`${timestamp}.${purpose}.${body}`).digest('hex');\n  return { timestamp, signature, body };\n}\n\nfunction errorText(json) {\n  const e = json.error;\n  if (!e) return json.message || 'Unknown error';\n  return typeof e === 'string' ? e : (e.description || e.message || JSON.stringify(e)).slice(0, 500);\n}\n\n// Writes the outcome back to Convex. Convex treats a repeat of the same key as\n// a no-op, so this node's retries can never create a second record.\nreturn $input.all().map((item, i) => {\n  const source = $('Compose email').itemMatching(i).json;\n  const payload = { eventId: source.eventId, status: 'failed', executionId: String($execution.id), error: errorText(item.json) };\n  return { json: signFor('notification-result', JSON.stringify(payload)) };\n});\n"
+      },
+      "id": "ab4476ba-05aa-5fb2-abcc-10483c82db7e",
+      "name": "Result: failed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/notifications",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "id": "d381a2a8-8111-5985-8e1b-0356e221be6c",
+      "name": "Record sent in Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        -100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.CONVEX_SITE_URL }}/n8n/notifications",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}"
+      },
+      "id": "fe4833b2-3c8a-526e-aac2-6e65c9cab649",
+      "name": "Record failure in Convex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1780,
+        160
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Notification email could not be sent: {{ JSON.parse($('Result: failed').first().json.body).error }} (recorded on the loan in LendLoop)"
+      },
+      "id": "b72a3f0b-e5a5-57bb-9d35-97ee05b678d2",
+      "name": "Fail the run",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        160
+      ]
+    }
+  ],
+  "connections": {
+    "Loan event (webhook)": {
+      "main": [
+        [
+          {
+            "node": "Verify signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify signature": {
+      "main": [
+        [
+          {
+            "node": "Signature valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature valid?": {
+      "main": [
+        [
+          {
+            "node": "Already handled?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject (401)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already handled?": {
+      "main": [
+        [
+          {
+            "node": "Ack duplicate (200)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Accept (202)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accept (202)": {
+      "main": [
+        [
+          {
+            "node": "Compose email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose email": {
+      "main": [
+        [
+          {
+            "node": "Send email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send email": {
+      "main": [
+        [
+          {
+            "node": "Result: sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Result: failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Result: sent": {
+      "main": [
+        [
+          {
+            "node": "Record sent in Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Result: failed": {
+      "main": [
+        [
+          {
+            "node": "Record failure in Convex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record failure in Convex": {
+      "main": [
+        [
+          {
+            "node": "Fail the run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "LendLoopErrors03",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "active": false,
+  "versionId": "b3cba445-ad6e-56b9-8955-2944a894afe5"
+}

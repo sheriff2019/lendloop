@@ -1,0 +1,83 @@
+# Local automation stack for LendLoop: n8n (self-hosted) + Mailpit (a local inbox).
+#
+#   npm run setup:secrets      # once: writes .env with fresh secrets
+#   docker compose up -d       # imports + publishes the workflows, then starts n8n
+#
+#   n8n      http://localhost:5678   (create the owner account on first visit)
+#   Mailpit  http://localhost:8025   (every email the workflows send lands here)
+#
+# Secrets come from .env (git-ignored) — never from this file or the workflow JSON.
+
+name: lendloop
+
+x-n8n-env: &n8n-env
+  N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?Run npm run setup:secrets first}
+  # HMAC secrets: one per direction. The Code nodes read them as $env.*
+  CONVEX_TO_N8N_SECRET: ${CONVEX_TO_N8N_SECRET:?Run npm run setup:secrets first}
+  N8N_TO_CONVEX_SECRET: ${N8N_TO_CONVEX_SECRET:?Run npm run setup:secrets first}
+  # Where n8n reaches Convex's HTTP actions (the local backend runs on the host).
+  CONVEX_SITE_URL: ${CONVEX_SITE_URL_FOR_N8N:-http://host.docker.internal:3211}
+  APP_URL: ${APP_URL:-http://localhost:3000}
+  MAIL_FROM: ${MAIL_FROM:-LendLoop <no-reply@lendloop.local>}
+  ADMIN_ALERT_EMAIL: ${ADMIN_ALERT_EMAIL:-admin@lendloop.local}
+  GENERIC_TIMEZONE: ${TIMEZONE:-UTC}
+  TZ: ${TIMEZONE:-UTC}
+  # Code nodes may read $env (for the two HMAC secrets) and use Node's crypto.
+  N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+  NODE_FUNCTION_ALLOW_BUILTIN: crypto
+  # Keep execution data (which contains names/emails) for 7 days only.
+  EXECUTIONS_DATA_PRUNE: "true"
+  EXECUTIONS_DATA_MAX_AGE: "168"
+  N8N_DIAGNOSTICS_ENABLED: "false"
+  N8N_PERSONALIZATION_ENABLED: "false"
+  N8N_SECURE_COOKIE: "false" # plain http on localhost only; see docs/PRODUCTION.md
+  N8N_WEBHOOK_URL: http://localhost:5678/
+
+services:
+  mailpit:
+    image: axllent/mailpit:v1.33.1
+    ports:
+      - "127.0.0.1:8025:8025" # web inbox
+    restart: unless-stopped
+
+  # One-shot: imports the local SMTP credential and the three workflows from ./n8n,
+  # then publishes the two triggered workflows. Safe to re-run (same ids).
+  n8n-setup:
+    image: n8nio/n8n:2.46.6
+    environment: *n8n-env
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        n8n import:credentials --input=/import/credentials/local-mailpit-smtp.json &&
+        n8n import:workflow --separate --input=/import/workflows &&
+        n8n publish:workflow --id=LendLoopEvents01 &&
+        n8n publish:workflow --id=LendLoopRemind02 &&
+        n8n publish:workflow --id=LendLoopErrors03
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/import:ro
+    restart: "no"
+
+  n8n:
+    image: n8nio/n8n:2.46.6
+    environment: *n8n-env
+    ports:
+      - "127.0.0.1:5678:5678"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      mailpit:
+        condition: service_started
+      n8n-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+volumes:
+  n8n_data:

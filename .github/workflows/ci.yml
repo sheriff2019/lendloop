@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Convex types are committed (convex/_generated), so no deployment is needed here.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: No secrets in exported n8n workflows
+        run: npm run check:workflows
